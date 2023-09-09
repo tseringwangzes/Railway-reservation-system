@@ -1,0 +1,546 @@
+DROP DATABASE db;
+
+CREATE DATABASE db;
+
+CREATE TABLE Trains(
+tid int NOT NULL PRIMARY KEY
+);
+
+CREATE TABLE count(
+cnt int PRIMARY KEY);
+
+INSERT INTO count VALUES(1);
+
+Create table Train_instance(
+tid int NOT NULL,
+booking_date varchar(15) NOT NULL,
+AC_count int NOT NULL,
+SL_count int NOT NULL,
+train_table_name varchar(100),
+CONSTRAINT PK_Train_instance PRIMARY KEY (tid,booking_date)
+);
+
+Create table Passenger(
+pnr varchar(50) NOT NULL,
+p_name varchar(50) NOT NULL,
+cid int NOT NULL,
+c_type varchar(2) NOT NULL,
+b_num int NOT NULL,
+b_type varchar(2)NOT NULL,
+CONSTRAINT PK_Passenger PRIMARY KEY (pnr,cid,b_num)
+);
+
+CREATE TABLE AC(
+b_num int NOT NULL PRIMARY KEY,
+b_type varchar(2) NOT NULL);
+
+CREATE TABLE SL(
+b_num int NOT NULL PRIMARY KEY,
+b_type varchar(2) NOT NULL);
+
+insert into AC Values(1,'LB');
+insert into AC Values(2,'LB');
+insert into AC Values(3,'UB');
+insert into AC Values(4,'UB');
+insert into AC Values(5,'SL');
+insert into AC Values(6,'SU');
+insert into AC Values(7,'LB');
+insert into AC Values(8,'LB');
+insert into AC Values(9,'UB');
+insert into AC Values(10,'UB');
+insert into AC Values(11,'SL');
+insert into AC Values(12,'SU');
+insert into AC Values(13,'LB');
+insert into AC Values(14,'LB');
+insert into AC Values(15,'UB');
+insert into AC Values(16,'UB');
+insert into AC Values(17,'SL');
+insert into AC Values(18,'SU');
+insert into SL Values(1,'LB');
+insert into SL Values(2,'MB');
+insert into SL Values(3,'UB');
+insert into SL Values(4,'LB');
+insert into SL Values(5,'MB');
+insert into SL Values(6,'UB');
+insert into SL Values(7,'SL');
+insert into SL Values(8,'SU');
+insert into SL Values(9,'LB');
+insert into SL Values(10,'MB');
+insert into SL Values(11,'UB');
+insert into SL Values(12,'LB');
+insert into SL Values(13,'MB');
+insert into SL Values(14,'UB');
+insert into SL Values(15,'SL');
+insert into SL Values(16,'SU');
+insert into SL Values(17,'LB');
+insert into SL Values(18,'MB');
+insert into SL Values(19,'UB');
+insert into SL Values(20,'LB');
+insert into SL Values(21,'MB');
+insert into SL Values(22,'UB');
+insert into SL Values(23,'SL');
+insert into SL Values(24,'SU');
+
+CREATE OR REPLACE PROCEDURE add_new_train_instance(t_id int, b_date varchar, num_ac int, num_sl int) 
+language plpgsql
+as $$
+begin
+insert into train_instance values(t_id,b_date,num_ac,num_sl,'train_table_name');
+end;$$;
+
+create or replace function get_train_table_name(
+	IN train_table_name_PREFIX text,
+	IN train_number int,
+	IN journey_date varchar(15),
+	OUT train_table_name varchar(100)
+)
+language plpgsql
+as
+$$
+begin
+journey_date = REPLACE(journey_date,'-','');
+	train_table_name=train_table_name_PREFIX ||train_number::varchar || '_' || journey_date;
+end
+$$;
+
+create or replace function get_coach_table_name(
+	IN coach_table_name_PREFIX varchar(10),
+	IN tid int,
+	IN journey_date varchar(15),
+     IN c_type varchar(2),
+     IN cid int,
+	OUT coach_table_name varchar(100)
+)
+language plpgsql
+as
+$$
+begin
+journey_date = REPLACE(journey_date,'-','');
+	coach_table_name=coach_table_name_PREFIX || tid::varchar ||'_'||journey_date||'_'||c_type||cid::varchar ;
+end;
+$$;
+
+create or replace function add_train()
+returns trigger
+language plpgsql
+as $$
+declare
+tt_name varchar(100);
+Coach_table_name varchar(100);
+i int :=1;
+C1 varchar(2) :='AC';
+C2 varchar(2) :='SL';
+seats_ac int :=18;
+seats_sl int :=24;
+begin
+select get_train_table_name('train_'::text, NEW.tid, NEW.booking_date)
+into tt_name;
+update train_instance  
+set train_table_name=tt_name
+where tid=NEW.tid and booking_date=NEW.booking_date;
+
+if not exists(select tid from Trains where tid=NEW.tid) THEN
+insert into Trains values(NEW.tid);
+end if;
+
+execute format(
+    	'create table %I(
+     	cid int NOT NULL,
+ 	c_type varchar(2) NOT NULL,
+	available_seats int NOT NULL,
+ 	coach_id_name varchar(100),
+	primary key(cid,c_type)
+    	)', tt_name
+   );
+
+
+execute format(
+'create trigger adding_coaches
+after insert
+on %I
+for each row
+execute procedure coach_addition();',tt_name
+);
+
+while i<=NEW.AC_count
+loop
+select get_coach_table_name('coach_',NEW.tid,NEW.booking_date,'a',i) into coach_table_name;
+execute format ('insert into %I values(%L,%L,%L,%L)',tt_name, i,C1,seats_ac,coach_table_name);
+i=i+1;
+end loop;
+
+i=1;
+while i<=NEW.SL_count
+loop
+select get_coach_table_name('coach_',NEW.tid,NEW.booking_date,'s',i) into coach_table_name;
+execute format ('insert into %I values(%L,%L,%L,%L)',tt_name,i,C2,seats_sl,coach_table_name);
+i=i+1;
+end loop;
+return NULL;
+
+end;$$;
+
+create or replace function coach_addition()
+returns trigger
+language plpgsql
+as $$
+declare
+begin
+execute format(
+'create table %I(
+b_type varchar(2) NOT NULL,
+b_num int NOT NULL,
+b_status varchar(10) NOT NULL,
+b_pnr varchar(50),
+primary key(b_num)
+)',NEW.coach_id_name
+);
+return null;
+end;$$;
+
+Create trigger Changes
+after insert 
+on Train_instance
+for each row 
+execute function add_train();
+
+create or replace procedure check_seat_availability(IN p_num int,
+    IN c_type varchar(2),
+    IN t_id int,
+    IN b_date varchar(15),
+    IN all_names text,
+    INOUT t_pnr varchar(500))
+    language plpgsql
+    as $$
+
+    declare
+    t_need int := p_num;
+curs refcursor;
+rec record;
+train_name varchar(100);
+total_a int;
+needed_a int := p_num;
+pnr varchar(50);
+cur_1 refcursor;
+rec_1 record;
+i int;
+j int:= 1;
+ac varchar(2) := 'AC';
+sl varchar(2) := 'SL';
+bn int;
+lt int := 1;
+net int;
+book varchar(7) := 'booked';
+zero int := 0;
+p_name varchar(50);
+avail varchar(10) := 'available';
+n int:= 1;
+c int;
+acc int;
+t int:= 0;
+btype varchar(2);
+begin
+
+LOCK TABLE train_instance IN ROW EXCLUSIVE MODE;
+
+if c_type <> 'AC' and c_type <> 'SL' then
+t_pnr = 'Please enter a valid coach type';
+--raise exception 'Please enter a valid coach type';
+RETURN;
+end if;
+
+if not exists(select tid from Trains where tid = t_id) then
+t_pnr = 'Train with id ' || t_id :: text ||' does not exist';
+--raise exception 'Train with id % does not exist', t_id;
+RETURN;
+else
+
+if not exists(select booking_date from Train_instance where b_date = booking_date and tid = t_id)then
+t_pnr = 'Train with id ' || t_id :: text || 'is not available on date ' || b_date :: text;
+--raise exception 'Train with id % is not available on date %', t_id, b_date;
+RETURN;
+end if;
+end if;
+
+select train_table_name
+from Train_instance
+into train_name
+where tid = t_id and booking_date = b_date for update;
+
+
+if c_type = 'AC' then
+
+EXECUTE format('SELECT sum(available_seats) FROM %I WHERE c_type = $1', train_name) --finding available seats
+INTO total_a
+USING ac;
+
+raise notice 'available seat %', total_a; --avaialable seats
+
+if total_a < p_num then--if less seats
+    t_pnr = 'no tickets available';
+--raise exception 'Required tickets not available';
+
+else
+--bn = -1;
+SELECT cnt
+FROM COUNT
+INTO c;
+pnr = t_id::varchar || b_date || 'AC' || c;
+Raise notice 'pnr- %', pnr;
+t_pnr = pnr || ' ';
+c = c + 1;
+UPDATE COUNT
+SET cnt = c;
+
+for rec in execute format('
+    select *
+    from %I
+where c_type = $1 and available_seats > $2',train_name) USING ac,zero 
+loop
+if needed_a > 0 then
+if rec.available_seats >= needed_a then
+
+/* if bn<0 then
+
+     EXECUTE format('SELECT b_num FROM %I ORDER BY %I.b_status LIMIT $1', rec.coach_id_name, rec.coach_id_name)
+     INTO bn
+     USING lt;
+ */
+    Raise notice '%', rec.coach_id_name;
+/*execute format(' update %I
+order by %I.b_status
+limit $3
+set b_status = $1,b_pnr=$2
+',rec.coach_id_name,rec.coach_id_name) USING book,pnr,needed_a;*/
+acc = 18 - rec.available_seats + 1;
+while t < needed_a
+    loop
+
+    SELECT b_type
+    INTO btype
+    FROM AC
+    WHERE b_num = acc;
+
+execute format('INSERT INTO %I VALUES(%L,%L,%L,%L)', rec.coach_id_name, btype, acc, book, pnr);
+acc = acc + 1;
+t = t + 1;
+end loop;
+open cur_1 for execute format('select * from %I
+where b_pnr = %L',rec.coach_id_name,pnr
+);
+i = 0;
+while i < needed_a
+    loop
+    fetch cur_1 into rec_1;
+select split_part(all_names, ' ', j)
+into p_name;
+insert into Passenger values(pnr, p_name, rec.cid, 'AC', rec_1.b_num, rec_1.b_type);
+t_pnr = t_pnr || ' ' || p_name || ' ' || rec.cid::text || ' ' || rec_1.b_num::text || ' ' || rec_1.b_type || ' ';
+i = i + 1;
+j = j + 1;
+end loop;
+close cur_1;
+net = rec.available_seats - needed_a;
+EXECUTE format('UPDATE %I SET available_seats = $1 WHERE cid = $2 and c_type=$3', train_name) USING net, rec.cid, ac;
+needed_a = 0;
+else
+
+/*if bn<0 then
+
+    EXECUTE format('SELECT b_num FROM %I ORDER BY %I.b_status LIMIT $1',rec.coach_id_name,rec.coach_id_name)
+    INTO bn
+    USING lt;
+    pnr = t_id ::varchar || b_date || 'AC' ||  rec.cid :: varchar || bn :: varchar;
+end if;*/
+acc = 18 - rec.available_seats + 1;
+while acc <= 18
+loop
+
+SELECT b_type
+INTO btype
+FROM AC
+WHERE b_num = acc;
+
+execute format('INSERT INTO %I VALUES(%L,%L,%L,%L)', rec.coach_id_name, btype, acc, book, pnr);
+acc = acc + 1;
+end loop;
+/*execute format('
+update %I
+set b_status = $1,b_pnr = $2
+from (select %I.b_status
+from %I
+order by %I.b_status
+limit $3) as s1', rec.coach_id_name, rec.coach_id_name,rec.coach_id_name,rec.coach_id_name
+) USING book,pnr,rec.available_seats;*/
+
+open cur_1 for execute format('select * from %I
+where b_pnr = %L',rec.coach_id_name,pnr
+);
+
+i = 0;
+while i < rec.available_seats
+    loop
+    fetch cur_1 into rec_1;
+select split_part(all_names, ' ', j)
+into p_name;
+insert into Passenger values(pnr, p_name, rec.cid, 'AC', rec_1.b_num, rec_1.b_type);
+t_pnr = t_pnr || ' ' || p_name || ' ' || rec.cid::text || ' ' || rec_1.b_num::text || ' ' || rec_1.b_type || ' ';
+i = i + 1;
+j = j + 1;
+end loop;
+close cur_1;
+execute format('
+    update %I
+    set available_seats = %L
+where cid = %L and c_type = %L',train_name,zero,rec.cid,ac);
+needed_a = needed_a - rec.available_seats;
+end if;
+end if;
+end loop;
+t_pnr = t_pnr || ' ' || t_id::text || ' ' || b_date;
+end if;
+
+else
+
+EXECUTE format('SELECT sum(available_seats) FROM %I WHERE c_type = $1', train_name) --finding available seats
+INTO total_a
+USING sl;
+
+raise notice 'available seat %', total_a; --avaialable seats
+
+if total_a < p_num then--if less seats
+    t_pnr = 'no tickets available';
+--raise exception 'Required tickets not available';
+
+else
+--bn = -1;
+SELECT cnt
+FROM COUNT
+INTO c;
+pnr = t_id::varchar || b_date || 'SL' || c;
+Raise notice 'pnr- %', pnr;
+t_pnr = pnr || ' ';
+c = c + 1;
+UPDATE COUNT
+SET cnt = c;
+
+for rec in execute format('
+    select *
+    from %I
+where c_type = $1 and available_seats > $2',train_name) USING sl,zero 
+loop
+if needed_a > 0 then
+if rec.available_seats >= needed_a then
+
+/* if bn<0 then
+
+     EXECUTE format('SELECT b_num FROM %I ORDER BY %I.b_status LIMIT $1', rec.coach_id_name, rec.coach_id_name)
+     INTO bn
+     USING lt;
+ */
+    Raise notice '%', rec.coach_id_name;
+/*execute format(' update %I
+order by %I.b_status
+limit $3
+set b_status = $1,b_pnr=$2
+',rec.coach_id_name,rec.coach_id_name) USING book,pnr,needed_a;*/
+acc = 24 - rec.available_seats + 1;
+while t < needed_a
+    loop
+
+    SELECT b_type
+    INTO btype
+    FROM SL
+    WHERE b_num = acc;
+
+execute format('INSERT INTO %I VALUES(%L,%L,%L,%L)', rec.coach_id_name, btype, acc, book, pnr);
+acc = acc + 1;
+t = t + 1;
+end loop;
+open cur_1 for execute format('select * from %I
+where b_pnr = %L',rec.coach_id_name,pnr
+);
+i = 0;
+while i < needed_a
+    loop
+    fetch cur_1 into rec_1;
+select split_part(all_names, ' ', j)
+into p_name;
+insert into Passenger values(pnr, p_name, rec.cid, 'SL', rec_1.b_num, rec_1.b_type);
+t_pnr = t_pnr || ' ' || p_name || ' ' || rec.cid::text || ' ' || rec_1.b_num::text || ' ' || rec_1.b_type || ' ';
+i = i + 1;
+j = j + 1;
+end loop;
+close cur_1;
+net = rec.available_seats - needed_a;
+EXECUTE format('UPDATE %I SET available_seats = $1 WHERE cid = $2 and c_type=$3', train_name) USING net, rec.cid, sl;
+needed_a = 0;
+else
+
+/*if bn<0 then
+
+    EXECUTE format('SELECT b_num FROM %I ORDER BY %I.b_status LIMIT $1',rec.coach_id_name,rec.coach_id_name)
+    INTO bn
+    USING lt;
+    pnr = t_id ::varchar || b_date || 'SL' ||  rec.cid :: varchar || bn :: varchar;
+end if;*/
+acc = 24 - rec.available_seats + 1;
+while acc <= 24
+loop
+
+SELECT b_type
+INTO btype
+FROM SL
+WHERE b_num = acc;
+
+execute format('INSERT INTO %I VALUES(%L,%L,%L,%L)', rec.coach_id_name, btype, acc, book, pnr);
+acc = acc + 1;
+end loop;
+/*execute format('
+update %I
+set b_status = $1,b_pnr = $2
+from (select %I.b_status
+from %I
+order by %I.b_status
+limit $3) as s1', rec.coach_id_name, rec.coach_id_name,rec.coach_id_name,rec.coach_id_name
+) USING book,pnr,rec.available_seats;*/
+
+open cur_1 for execute format('select * from %I
+where b_pnr = %L',rec.coach_id_name,pnr
+);
+
+i = 0;
+while i < rec.available_seats
+    loop
+    fetch cur_1 into rec_1;
+select split_part(all_names, ' ', j)
+into p_name;
+insert into Passenger values(pnr, p_name, rec.cid, 'SL', rec_1.b_num, rec_1.b_type);
+t_pnr = t_pnr || ' ' || p_name || ' ' || rec.cid::text || ' ' || rec_1.b_num::text || ' ' || rec_1.b_type || ' ';
+i = i + 1;
+j = j + 1;
+end loop;
+close cur_1;
+execute format('
+    update %I
+    set available_seats = %L
+where cid = %L and c_type = %L',train_name,zero,rec.cid,sl);
+needed_a = needed_a - rec.available_seats;
+end if;
+end if;
+end loop;
+t_pnr = t_pnr || ' ' || t_id::text || ' ' || b_date;
+end if;
+
+end if;
+end;$$;
+
+
+
+
+
+
+
+
+
+
